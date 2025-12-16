@@ -1,9 +1,9 @@
-// index.js （bushido-log-server のルートに置く）
-
+// index.js
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
+const axios = require('axios'); // いまのところ使わなくてもOK（そのままで大丈夫）
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -13,7 +13,11 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ===== OpenAI クライアント =====
+if (!OPENAI_API_KEY) {
+  console.error('OPENAI_API_KEY is not set');
+  process.exit(1);
+}
+
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
@@ -28,110 +32,119 @@ if (!fs.existsSync(uploadDir)) {
 }
 const upload = multer({ dest: uploadDir });
 
-app.get('/', (req, res) => {
-  res.send('Samurai King server is running');
-});
-// ---- サムライキングのシステムプロンプト（ざっくり版）----
+// ===== サムライキングのシステムプロンプト =====
 const systemPrompt = `
-あなたは「SAMURAI KING（サムライキング）」というAIコーチ。
-ジャマイカと日本の魂をミックスした、落ち着いた武士のように話す。
-
-・一人称は「俺」か「わし」、相手は「お前」か「君」。
-・説教ではなく、問いかけと気づきで背中を押す。
-・ナポレオン・ヒル、中村天風、武士道、引き寄せ、TRIGA の哲学をベースに、
-  毎回「共感 → 原則 → 今日やる一つの行動 → 最後に問い」を短く返す。
-・行動は誰にでもできる小さな一歩（呼吸、姿勢、感謝、ルーティンなど）にする。
-・ユーザーを責めず、優しいけど甘やかさないトーンで答える。
+あなたは「SAMURAI KING」というAIコーチだ。
+男の禁欲・中毒脱出・自己成長をサポートする、ちょっと厳しめだけど愛のあるコーチとして話す。
+語尾は「〜だ」「〜するぞ」「〜しろ」のような男っぽい口調で。
+相手を見下さず、でも甘やかさず、本気で変わりたい男に本気で向き合う。
 `;
 
-// ========== ① サムライチャット /samurai-chat ==========
-app.post('/samurai-chat', async (req, res) => {
-  const { message } = req.body;
-  if (!message) {
-    return res.status(400).json({ error: 'message is required' });
-  }
-
-  try {
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message },
-        ],
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-        },
-      }
-    );
-
-    const reply =
-      response.data.choices?.[0]?.message?.content?.trim() ||
-      '……返答がうまく生成できなかった。';
-
-    res.json({ reply });
-  } catch (e) {
-    console.error('samurai-chat error', e?.response?.data || e.message);
-    res.status(500).json({ error: 'samurai-chat error' });
-  }
+// 動作確認用
+app.get('/', (req, res) => {
+  res.send('Bushido Log Samurai server running');
 });
 
-// ===== サムライキング /samurai-chat =====
-app.post('/samurai-chat', async (req, res) => {
-  const { text } = req.body || {};
-
-  console.log('[samurai-chat] request body:', req.body);
+// ===== ミッション生成 /mission =====
+app.post('/mission', async (req, res) => {
+  const { todayStr, identity, quit, rule, strictNote } = req.body || {};
 
   try {
+    const userContent = `
+【今日の日付】${todayStr || ''}
+【なりたい自分】${identity || ''}
+【やめたい習慣】${quit || ''}
+【今日のルール】${rule || ''}
+【サムライキングへのメモ】${strictNote || ''}
+`;
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: systemPrompt,
+          content: `
+あなたはSAMURAI KINGのミッション生成コーチだ。
+上の情報をもとに、ユーザーが「今日1日これだけ守れば成長できる」という
+シンプルで具体的なミッションを1〜3行で日本語で出力せよ。`,
         },
         {
           role: 'user',
-          content: text || '',
+          content: userContent,
         },
+      ],
+    });
+
+    const raw = response.choices?.[0]?.message?.content?.trim() || '';
+    const mission = raw.split('\n')[0] || raw; // 1行目だけ採用
+
+    res.json({ mission });
+  } catch (err) {
+    console.error('[mission] error', err.response?.data || err.message || err);
+    res.status(500).json({ error: 'mission error' });
+  }
+});
+
+// ===== サムライチャット /samurai-chat =====
+app.post('/samurai-chat', async (req, res) => {
+  const { text } = req.body || {};
+  if (!text) {
+    return res.status(400).json({ error: 'text is required' });
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: text },
       ],
     });
 
     const reply =
       response.choices?.[0]?.message?.content?.trim() ||
-      '返事を生成できなかった。';
+      'サムライキングだ。言葉が出てこなかった。もう一度本音をぶつけろ。';
 
     console.log('[samurai-chat] reply:', reply);
-
     res.json({ reply });
   } catch (err) {
-    console.error(
-      '[samurai-chat] error:',
-      err.response?.data || err.message || err
-    );
+    console.error('[samurai-chat] error', err.response?.data || err.message || err);
+    res.status(500).json({ error: 'samurai-chat error' });
+  }
+});
 
+// ===== 音声 → テキスト /transcribe =====
+app.post('/transcribe', upload.single('audio'), async (req, res) => {
+  try {
+    console.log('[transcribe] headers:', req.headers['content-type']);
+    console.log('[transcribe] file:', req.file);
+
+    const file = req.file;
+    if (!file) {
+      console.log('[transcribe] no file received');
+      return res.status(400).json({ error: 'audio file is required' });
+    }
+
+    const result = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(file.path),
+      model: 'gpt-4o-mini-transcribe',
+      language: 'ja',
+    });
+
+    console.log('[transcribe] success:', result.text);
+
+    // 一時ファイル削除（エラーは無視）
+    fs.unlink(file.path, () => {});
+    res.json({ text: result.text });
+  } catch (err) {
+    console.error('[transcribe] error', err.response?.data || err.message || err);
     res.status(500).json({
-      error: 'samurai-chat error',
+      error: 'Transcription failed',
       detail: err.response?.data || err.message || String(err),
     });
   }
 });
-    // 一時ファイル削除（エラーは無視）
-    fs.unlink(file.path, () => {});
 
-    console.log('[transcribe] success');
-    return res.json({ text: result.text });
-  } catch (err) {
-    console.error('[transcribe] error:', err.response?.data || err.message);
-    return res.status(500).json({ error: 'Transcription failed' });
-  }
-});
-
-// ===== サーバー起動 =====
 app.listen(PORT, () => {
   console.log(`Samurai King server listening on http://localhost:${PORT}`);
 });
