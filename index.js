@@ -1,4 +1,4 @@
-// index.js（bushido-log-server のルートに置く）
+// index.js （bushido-log-server のルートに置く）
 
 require('dotenv').config();
 const express = require('express');
@@ -13,7 +13,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ---- OpenAI クライアント ----
+// ===== OpenAI クライアント =====
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
@@ -21,10 +21,13 @@ const openai = new OpenAI({
 app.use(cors());
 app.use(express.json());
 
-// ---- 音声アップロード用（tmp フォルダに保存）----
-const upload = multer({
-  dest: path.join(__dirname, 'uploads'),
-});
+// ===== アップロードフォルダ設定（なければ作る）=====
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+const upload = multer({ dest: uploadDir });
+
 
 // ---- サムライキングのシステムプロンプト（ざっくり版）----
 const systemPrompt = `
@@ -121,67 +124,44 @@ app.post('/mission', async (req, res) => {
 });
 
 // ========== ③ テキスト → 音声 /tts ==========
-app.post('/tts', async (req, res) => {
-  const { text } = req.body;
-  if (!text) {
-    return res.status(400).json({ error: 'text is required' });
-  }
-
-  try {
-    const response = await axios.post(
-      'https://api.openai.com/v1/audio/speech',
-      {
-        model: 'gpt-4o-mini-tts',
-        voice: 'alloy',
-        input: text,
-        format: 'mp3',
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-        },
-        responseType: 'arraybuffer',
-      }
-    );
-
-    const base64 = Buffer.from(response.data, 'binary').toString('base64');
-    res.json({ audioBase64: base64 });
-  } catch (e) {
-    console.error('tts error', e?.response?.data || e.message);
-    res.status(500).json({ error: 'tts error' });
-  }
-});
-
-// ========== ④ 音声 → テキスト /transcribe ==========
+// ===== 音声 -> テキスト /transcribe =====
 app.post('/transcribe', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'file is required' });
+  }
+
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'file is required' });
-    }
+    console.log('Transcribe start: file =', req.file.path);
 
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(req.file.path),
       model: 'gpt-4o-mini-transcribe',
-      // language: 'ja',
+      language: 'ja',
     });
 
-    // 一時ファイル削除（エラーは無視）
-    fs.unlink(req.file.path, () => {});
+    // 一時ファイル削除（失敗してもアプリは落とさない）
+    fs.unlink(req.file.path, (err) => {
+      if (err) console.warn('Failed to delete temp file:', err.message);
+    });
 
-    res.json({ text: result.text });
+    console.log('Transcribe success:', result.text);
+    res.json({ text: result.text || '' });
   } catch (err) {
-    console.error('Transcribe error:', err.response?.data || err.message);
+    console.error(
+      'Transcribe error:',
+      err.response?.data || err.message || err
+    );
+
+    // 念のためここでも削除を試す
+    if (req.file?.path) {
+      fs.unlink(req.file.path, () => {});
+    }
+
     res.status(500).json({ error: 'Transcription failed' });
   }
 });
 
-// 動作確認用
-app.get('/', (req, res) => {
-  res.send('Bushido Log server is running');
-});
-
-// ---- サーバー起動 ----
+// ===== サーバー起動 =====
 app.listen(PORT, () => {
   console.log(`Samurai King server listening on http://localhost:${PORT}`);
 });
