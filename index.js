@@ -125,31 +125,41 @@ app.post('/mission', async (req, res) => {
 
 
 // ===== 音声 → テキスト /transcribe =====
-app.post('/transcribe', upload.any(), async (req, res) => {
+app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    // まずファイル確認
-    const file = (req.files && req.files[0]) || null;
-
+    // ① ファイル確認
+    const file = req.file;
     if (!file) {
+      console.log('[transcribe] no file');
       return res.status(400).json({ error: 'audio file is required' });
     }
 
-    console.log('[transcribe] got file:', file.originalname, file.mimetype, file.path);
+    console.log(
+      '[transcribe] got file:',
+      file.originalname,
+      file.mimetype,
+      file.path
+    );
 
-    // OpenAI で文字起こし
+    // ② OpenAI で文字起こし
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(file.path),
       model: 'gpt-4o-mini-transcribe',
       // language: 'ja',
     });
 
-    // 一時ファイル削除（エラーは無視）
+    // ③ 一時ファイル削除（エラーは無視）
     fs.unlink(file.path, () => {});
 
     console.log('[transcribe] success');
     res.json({ text: result.text });
   } catch (err) {
-    console.error('[transcribe] error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Transcription failed' });
+    console.error(
+      '[transcribe] error:',
+      err.response?.data || err.message || err
+    );
+    res
+      .status(500)
+      .json({ error: 'Transcription failed', detail: err.message || String(err) });
   }
 });
