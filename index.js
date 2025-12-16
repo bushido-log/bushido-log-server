@@ -1,4 +1,4 @@
-// samurai-server/index.js
+// index.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -8,25 +8,28 @@ const multer = require('multer');
 const fs = require('fs');
 const OpenAI = require('openai');
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
 const app = express();
 const PORT = process.env.PORT || 3001;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// OpenAI SDK クライアント
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 app.use(cors());
 app.use(express.json());
 
-// ===== uploads フォルダ（音声一時保存用） =====
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-}
+// ==== ファイルアップロード設定 ====
 const upload = multer({
-  dest: uploadsDir,
+  dest: path.join(__dirname, 'uploads'),
 });
 
-// ===== サムライキング用 system プロンプト =====
+// ==== ヘルスチェック用 ====
+app.get('/', (req, res) => {
+  res.send('Samurai King server is running');
+});
+
+// ==== サムライキング用 systemPrompt ====
+
 const systemPrompt = `
 あなたは「SAMURAI KING（サムライキング）」というAIコーチです。
 ジャマイカと日本の魂をミックスした、静かな武士のようなメンターとして振る舞ってください。
@@ -82,15 +85,9 @@ const systemPrompt = `
 - ユーザーを責めず、「今ここから1ミリ進む」ことにフォーカスする。
 `;
 
-// ===== ルート確認用 =====
-app.get('/', (req, res) => {
-  res.send('Samurai King server is running');
-});
-
-// ====== ① チャット /samurai-chat ======
+// ==== ① チャット /samurai-chat ====
 app.post('/samurai-chat', async (req, res) => {
   const { message } = req.body;
-
   if (!message) {
     return res.status(400).json({ error: 'message is required' });
   }
@@ -119,12 +116,12 @@ app.post('/samurai-chat', async (req, res) => {
 
     res.json({ reply });
   } catch (e) {
-    console.error('samurai error', e?.response?.data || e.message);
-    res.status(500).json({ error: 'samurai error' });
+    console.error('samurai-chat error', e?.response?.data || e.message);
+    res.status(500).json({ error: 'samurai-chat error' });
   }
 });
 
-// ====== ② サムライミッション /mission ======
+// ==== ② サムライミッション /mission ====
 app.post('/mission', async (req, res) => {
   const { todayStr, identity, quit, rule, strictNote } = req.body;
 
@@ -161,7 +158,7 @@ app.post('/mission', async (req, res) => {
       response.data.choices?.[0]?.message?.content?.trim() ||
       '深呼吸を3回して姿勢を正す。';
 
-    mission = mission.split('\n')[0];
+    mission = mission.split('\n')[0]; // 1行だけにする
 
     res.json({ mission });
   } catch (e) {
@@ -170,7 +167,7 @@ app.post('/mission', async (req, res) => {
   }
 });
 
-// ====== ③ TTS /tts （テキスト → mp3 base64） ======
+// ==== ③ TTS /tts ====
 app.post('/tts', async (req, res) => {
   const { text } = req.body;
   if (!text) {
@@ -203,7 +200,8 @@ app.post('/tts', async (req, res) => {
   }
 });
 
-// ====== ④ 音声 → テキスト /transcribe ======
+// ==== ④ 音声 → テキスト /transcribe ====
+// フロントからは FormData のフィールド名 "audio" で送られてくる想定
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
@@ -212,11 +210,11 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(req.file.path),
-      model: 'gpt-4o-mini-transcribe', // 音声文字起こし用モデル
-      // language: 'ja', // 日本語メインなら付けてもOK
+      model: 'gpt-4o-mini-transcribe',
+      // language: 'ja', // 日本語メインなら付けてOK
     });
 
-    // 一時ファイル削除（エラーは無視）
+    // 一時ファイルを削除（失敗しても無視）
     fs.unlink(req.file.path, () => {});
 
     res.json({ text: result.text });
@@ -226,7 +224,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ====== サーバー起動 ======
+// ==== サーバー起動 ====
 app.listen(PORT, () => {
   console.log(`Samurai King server listening on http://localhost:${PORT}`);
 });
