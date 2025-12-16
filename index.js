@@ -85,33 +85,47 @@ app.post('/mission', async (req, res) => {
   }
 });
 
-// ======== ① サムライキング /samurai-chat ========
+// ====== サムライチャット /samurai-chat ======
 app.post('/samurai-chat', async (req, res) => {
   const { text } = req.body || {};
+  console.log('[samurai-chat] request body:', req.body);
 
-  // フロントから text が来てなかったら 400 を返す
+  // フロントから text が来てなかったら 400
   if (!text || typeof text !== 'string') {
     return res.status(400).json({ error: 'text is required' });
   }
 
   try {
-    // OpenAI へリクエスト（axios版）
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: text },
-        ],
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-      }
+    // OpenAI に投げる
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: text },
+      ],
+      temperature: 0.9,
+    });
+
+    const reply =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      '・・・今日はうまく言葉が出てこん。';
+
+    console.log('[samurai-chat] reply:', reply);
+
+    // アプリ側にはシンプルに reply を返す
+    res.json({ reply });
+  } catch (err) {
+    console.error(
+      '[samurai-chat] error:',
+      err.response?.data || err.message || String(err)
     );
+
+    res.status(500).json({
+      error: 'samurai-chat error',
+      detail: err.response?.data || err.message || String(err),
+    });
+  }
+});
 
     const reply =
       response.data.choices?.[0]?.message?.content?.trim() || '';
