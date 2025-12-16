@@ -123,45 +123,33 @@ app.post('/mission', async (req, res) => {
   }
 });
 
-// ========== ③ テキスト → 音声 /tts ==========
-// ===== 音声 -> テキスト /transcribe =====
-app.post('/transcribe', upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'file is required' });
-  }
 
+// ===== 音声 → テキスト /transcribe =====
+app.post('/transcribe', upload.any(), async (req, res) => {
   try {
-    console.log('Transcribe start: file =', req.file.path);
+    // まずファイル確認
+    const file = (req.files && req.files[0]) || null;
 
-    const result = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(req.file.path),
-      model: 'gpt-4o-mini-transcribe',
-      language: 'ja',
-    });
-
-    // 一時ファイル削除（失敗してもアプリは落とさない）
-    fs.unlink(req.file.path, (err) => {
-      if (err) console.warn('Failed to delete temp file:', err.message);
-    });
-
-    console.log('Transcribe success:', result.text);
-    res.json({ text: result.text || '' });
-  } catch (err) {
-    console.error(
-      'Transcribe error:',
-      err.response?.data || err.message || err
-    );
-
-    // 念のためここでも削除を試す
-    if (req.file?.path) {
-      fs.unlink(req.file.path, () => {});
+    if (!file) {
+      return res.status(400).json({ error: 'audio file is required' });
     }
 
+    console.log('[transcribe] got file:', file.originalname, file.mimetype, file.path);
+
+    // OpenAI で文字起こし
+    const result = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(file.path),
+      model: 'gpt-4o-mini-transcribe',
+      // language: 'ja',
+    });
+
+    // 一時ファイル削除（エラーは無視）
+    fs.unlink(file.path, () => {});
+
+    console.log('[transcribe] success');
+    res.json({ text: result.text });
+  } catch (err) {
+    console.error('[transcribe] error:', err.response?.data || err.message);
     res.status(500).json({ error: 'Transcription failed' });
   }
-});
-
-// ===== サーバー起動 =====
-app.listen(PORT, () => {
-  console.log(`Samurai King server listening on http://localhost:${PORT}`);
 });
