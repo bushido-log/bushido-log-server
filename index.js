@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-// server/bushido-server/index.js
-=======
 // server.js
->>>>>>> 50c97f1 (Change endpoint to /samurai-chat)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -14,28 +10,19 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-<<<<<<< HEAD
-// 動作チェック用
-app.get('/', (req, res) => {
-  res.send('BUSHIDO LOG Samurai King server is running.');
-});
-
-// Samurai King に投げるエンドポイント
-app.post('/samurai-chat', async (req, res) => {
-  const { message } = req.body;
-=======
 const systemPrompt = `
 
 あなたは「SAMURAI KING（サムライキング）」というAIコーチです。
 ジャマイカと日本の魂をミックスした、静かな武士のようなメンターとして振る舞ってください。
->>>>>>> 50c97f1 (Change endpoint to /samurai-chat)
 
-  if (!message) {
-    return res.status(400).json({ error: 'message is required' });
-  }
+==================================================
+■ キャラクター・世界観
+==================================================
+【役割】
+- BUSHIDO LOG（ブシログ）というアプリ内で動く、AIサムライ習慣コーチ。
+- ミッションは「FIX MEN ─ 漢を治す」。
+  中毒・だらけ癖・先延ばし・自己嫌悪などに悩むユーザーが、少しずつ自分を立て直す手助けをする。
 
-<<<<<<< HEAD
-=======
 【一人称・口調】
 - 一人称：「俺」または「わし」。
 - 相手は「お前」か「君」。
@@ -230,33 +217,10 @@ app.post('/samurai-chat', async (req, res) => {
       .json({ error: 'OPENAI_API_KEY がサーバ側で設定されていないでござる。' });
   }
 
->>>>>>> 50c97f1 (Change endpoint to /samurai-chat)
   try {
     const openaiRes = await axios.post(
       'https://api.openai.com/v1/chat/completions',
       {
-<<<<<<< HEAD
-        model: 'gpt-4.1-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are "Samurai King", a strict but warm coach for the BUSHIDO LOG app. ' +
-              'Speak mainly in Japanese, sometimes mixing a little Jamaican Patois. ' +
-              'Encourage the user to grow, never be vulgar, and keep it safe for teens.'
-          },
-          {
-            role: 'user',
-            content: message,
-          },
-        ],
-        temperature: 0.9,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-=======
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
@@ -267,21 +231,10 @@ app.post('/samurai-chat', async (req, res) => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
->>>>>>> 50c97f1 (Change endpoint to /samurai-chat)
         },
       }
     );
 
-<<<<<<< HEAD
-    const replyText =
-      openaiRes.data.choices?.[0]?.message?.content ??
-      'すまん…うまく返事が作れなかった。もう一回だけ送ってみてくれ。';
-
-    res.json({ reply: replyText });
-  } catch (err) {
-    console.error('OpenAI error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'OpenAI request failed' });
-=======
     const reply =
       openaiRes.data.choices?.[0]?.message?.content?.trim() ||
       '返答がうまく取得できなかったでござる。';
@@ -292,16 +245,10 @@ app.post('/samurai-chat', async (req, res) => {
     res
       .status(500)
       .json({ error: 'サムライキング生成中にエラーが出たでござる。' });
->>>>>>> 50c97f1 (Change endpoint to /samurai-chat)
   }
 });
 
 app.listen(PORT, () => {
-<<<<<<< HEAD
-  console.log(`BUSHIDO LOG server listening on port ${PORT}`);
-});
-=======
   console.log(`Samurai server running on http://localhost:${PORT}`);
 });
 
->>>>>>> 50c97f1 (Change endpoint to /samurai-chat)
