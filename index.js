@@ -21,14 +21,16 @@ const openai = new OpenAI({
 app.use(cors());
 app.use(express.json());
 
-// ===== アップロードフォルダ設定（なければ作る）=====
+// ===== アップロードフォルダ設定 =====
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 const upload = multer({ dest: uploadDir });
 
-
+app.get('/', (req, res) => {
+  res.send('Samurai King server is running');
+});
 // ---- サムライキングのシステムプロンプト（ざっくり版）----
 const systemPrompt = `
 あなたは「SAMURAI KING（サムライキング）」というAIコーチ。
@@ -124,11 +126,10 @@ app.post('/mission', async (req, res) => {
 });
 
 
-// ==== 音声 → テキスト /transcribe ====
-app.post('/transcribe', upload.single('audio'), async (req, res) => {
+// ===== 音声 → テキスト /transcribe =====
+app.post('/transcribe', upload.any(), async (req, res) => {
   try {
-    // --- アップロードされたファイルを確認 ---
-    const file = req.file;
+    const file = (req.files && req.files[0]) || null;
 
     if (!file) {
       console.log('[transcribe] no file');
@@ -137,24 +138,24 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
     console.log('[transcribe] got file:', file.originalname, file.mimetype, file.path);
 
-    // --- OpenAI で文字起こし ---
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(file.path),
       model: 'gpt-4o-mini-transcribe',
       // language: 'ja',
     });
 
-    // --- 一時ファイル削除（エラーは無視でOK） ---
-    fs.unlink(file.path, (err) => {
-      if (err) {
-        console.error('[transcribe] unlink error:', err.message);
-      }
-    });
+    // 一時ファイル削除（エラーは無視）
+    fs.unlink(file.path, () => {});
 
     console.log('[transcribe] success');
-    res.json({ text: result.text });
+    return res.json({ text: result.text });
   } catch (err) {
-    console.error('[transcribe] error:', err.response?.data || err.message || err);
-    res.status(500).json({ error: 'Transcription failed' });
+    console.error('[transcribe] error:', err.response?.data || err.message);
+    return res.status(500).json({ error: 'Transcription failed' });
   }
+});
+
+// ===== サーバー起動 =====
+app.listen(PORT, () => {
+  console.log(`Samurai King server listening on http://localhost:${PORT}`);
 });
