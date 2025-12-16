@@ -80,88 +80,46 @@ app.post('/samurai-chat', async (req, res) => {
   }
 });
 
-// ========== ② サムライミッション /mission ==========
-app.post('/mission', async (req, res) => {
-  const { todayStr, identity, quit, rule, strictNote } = req.body;
+// ===== サムライキング /samurai-chat =====
+app.post('/samurai-chat', async (req, res) => {
+  const { text } = req.body || {};
+
+  console.log('[samurai-chat] request body:', req.body);
 
   try {
-    const userContent =
-      `【日付】${todayStr}\n` +
-      `【サムライ宣言】${identity || ''}\n` +
-      `【やめたい習慣】${quit || ''}\n` +
-      `【毎日のルール】${rule || ''}\n` +
-      `【トーン指定】${strictNote || ''}`;
-
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'あなたは一日の小さなサムライミッションを1つだけ提案するAIです。短く、1行で、具体的な行動だけを出してください。',
-          },
-          { role: 'user', content: userContent },
-        ],
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt,
         },
-      }
-    );
-
-    let mission =
-      response.data.choices?.[0]?.message?.content?.trim() ||
-      '深呼吸を3回して姿勢を正す。';
-
-    mission = mission.split('\n')[0];
-    res.json({ mission });
-  } catch (e) {
-    console.error('mission error', e?.response?.data || e.message);
-    res.status(500).json({ error: 'mission error' });
-  }
-});
-
-
-// ===== 音声 → テキスト /transcribe =====
-app.post('/transcribe', upload.single('audio'), async (req, res) => {
-  try {
-    console.log('[transcribe] headers:', req.headers['content-type']);
-    console.log('[transcribe] file:', req.file);
-
-    const file = req.file;
-    if (!file) {
-      console.log('[transcribe] no file received');
-      return res.status(400).json({ error: 'audio file is required' });
-    }
-
-    // OpenAI で文字起こし
-    const result = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(file.path),
-      model: 'gpt-4o-mini-transcribe',
-      language: 'ja',
+        {
+          role: 'user',
+          content: text || '',
+        },
+      ],
     });
 
-    // 一時ファイル削除（エラーは無視）
-    fs.unlink(file.path, () => {});
+    const reply =
+      response.choices?.[0]?.message?.content?.trim() ||
+      '返事を生成できなかった。';
 
-    console.log('[transcribe] success:', result.text);
-    res.json({ text: result.text });
+    console.log('[samurai-chat] reply:', reply);
+
+    res.json({ reply });
   } catch (err) {
     console.error(
-      '[transcribe] error:',
+      '[samurai-chat] error:',
       err.response?.data || err.message || err
     );
+
     res.status(500).json({
-      error: 'Transcription failed',
+      error: 'samurai-chat error',
       detail: err.response?.data || err.message || String(err),
     });
   }
 });
-
     // 一時ファイル削除（エラーは無視）
     fs.unlink(file.path, () => {});
 
