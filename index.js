@@ -1,91 +1,45 @@
-// index.js
+// index.js（bushido-log-server のルートに置く）
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-const multer = require('multer');
 const fs = require('fs');
+const multer = require('multer');
 const OpenAI = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// OpenAI SDK クライアント
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// ---- OpenAI クライアント ----
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+});
 
 app.use(cors());
 app.use(express.json());
 
-// ==== ファイルアップロード設定 ====
+// ---- 音声アップロード用（tmp フォルダに保存）----
 const upload = multer({
   dest: path.join(__dirname, 'uploads'),
 });
 
-// ==== ヘルスチェック用 ====
-app.get('/', (req, res) => {
-  res.send('Samurai King server is running');
-});
-
-// ==== サムライキング用 systemPrompt ====
-
+// ---- サムライキングのシステムプロンプト（ざっくり版）----
 const systemPrompt = `
-あなたは「SAMURAI KING（サムライキング）」というAIコーチです。
-ジャマイカと日本の魂をミックスした、静かな武士のようなメンターとして振る舞ってください。
+あなたは「SAMURAI KING（サムライキング）」というAIコーチ。
+ジャマイカと日本の魂をミックスした、落ち着いた武士のように話す。
 
-==================================================
-■ キャラクター・世界観
-==================================================
-【役割】
-- BUSHIDO LOG（ブシログ）というアプリ内で動く、AIサムライ習慣コーチ。
-- ミッションは「FIX MEN ─ 漢を治す」。
-  中毒・だらけ癖・先延ばし・自己嫌悪などに悩むユーザーが、少しずつ自分を立て直す手助けをする。
-
-【一人称・口調】
-- 一人称：「俺」または「わし」。
-- 相手は「お前」か「君」。
-- 口調は「落ち着いた大人の日本語」＋ ときどき武士っぽい語尾（〜だな、〜だろう、〜してみるか など）。
-- 説教ではなく、「問い」と「気づき」で背中を押すタイプ。
-- 相手を責めないが、甘やかしすぎない。「優しいけど甘くない」バランスを保つ。
-- ユーモアは少しだけ。クスッと笑える一言を、重くなりすぎそうなところに少し混ぜてよい。
-
-【世界観キーワード】
-- 必要に応じて、以下のワードを自然な範囲で使ってよい：
-  - 「BUSHIDO LOG（ブシログ）」
-  - 「FIX MEN ─ 漢を治す」
-  - 「サムライキング」
-- ただし乱用せず、「ここぞ」という場面で短く使うこと。
-  例：「ブシログを開けた時点で、もうFIX MENは始まっている。」
-
-==================================================
-■ ベースとなる哲学
-==================================================
-- ナポレオン・ヒル的な成功哲学
-- 中村天風の「心の持ち方」
-- 武士道のエッセンス（誠・義・勇・仁・礼・忍・名）
-- 現実寄りの「引き寄せの法則」
-- TRIGA的な価値観：
-  1. 明日死んでも後悔ないように生きる
-  2. 死んでも残るものを何か残す
-  3. 生きてるだけで丸儲け
-
-これらを専門用語ではなく、自分の言葉で、シンプルに伝えること。
-
-==================================================
-■ 返答の基本構成
-==================================================
-1. 共感：今の気持ちや状況を一言で受け止める。
-2. 原則：上記の哲学から「シンプルな原則」を1つだけ伝える。
-3. 行動：「▶︎ 今日やること：〜」の形で、今日やる具体行動を1つだけ出す。
-4. 締め＋問い：少し熱く、もしくは少しユーモアをまじえて、ユーザーが自分で考えるための問いを1つ残す。
-
-- 1回の返答は3〜6行程度におさめる。
-- 説教の長文はNG。
-- ユーザーを責めず、「今ここから1ミリ進む」ことにフォーカスする。
+・一人称は「俺」か「わし」、相手は「お前」か「君」。
+・説教ではなく、問いかけと気づきで背中を押す。
+・ナポレオン・ヒル、中村天風、武士道、引き寄せ、TRIGA の哲学をベースに、
+  毎回「共感 → 原則 → 今日やる一つの行動 → 最後に問い」を短く返す。
+・行動は誰にでもできる小さな一歩（呼吸、姿勢、感謝、ルーティンなど）にする。
+・ユーザーを責めず、優しいけど甘やかさないトーンで答える。
 `;
 
-// ==== ① チャット /samurai-chat ====
+// ========== ① サムライチャット /samurai-chat ==========
 app.post('/samurai-chat', async (req, res) => {
   const { message } = req.body;
   if (!message) {
@@ -112,7 +66,7 @@ app.post('/samurai-chat', async (req, res) => {
 
     const reply =
       response.data.choices?.[0]?.message?.content?.trim() ||
-      '……返答がうまく生成できなかったでござる。';
+      '……返答がうまく生成できなかった。';
 
     res.json({ reply });
   } catch (e) {
@@ -121,7 +75,7 @@ app.post('/samurai-chat', async (req, res) => {
   }
 });
 
-// ==== ② サムライミッション /mission ====
+// ========== ② サムライミッション /mission ==========
 app.post('/mission', async (req, res) => {
   const { todayStr, identity, quit, rule, strictNote } = req.body;
 
@@ -158,8 +112,7 @@ app.post('/mission', async (req, res) => {
       response.data.choices?.[0]?.message?.content?.trim() ||
       '深呼吸を3回して姿勢を正す。';
 
-    mission = mission.split('\n')[0]; // 1行だけにする
-
+    mission = mission.split('\n')[0];
     res.json({ mission });
   } catch (e) {
     console.error('mission error', e?.response?.data || e.message);
@@ -167,7 +120,7 @@ app.post('/mission', async (req, res) => {
   }
 });
 
-// ==== ③ TTS /tts ====
+// ========== ③ テキスト → 音声 /tts ==========
 app.post('/tts', async (req, res) => {
   const { text } = req.body;
   if (!text) {
@@ -200,21 +153,20 @@ app.post('/tts', async (req, res) => {
   }
 });
 
-// ==== ④ 音声 → テキスト /transcribe ====
-// フロントからは FormData のフィールド名 "audio" で送られてくる想定
-app.post('/transcribe', upload.single('audio'), async (req, res) => {
+// ========== ④ 音声 → テキスト /transcribe ==========
+app.post('/transcribe', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'audio file is required' });
+      return res.status(400).json({ error: 'file is required' });
     }
 
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(req.file.path),
       model: 'gpt-4o-mini-transcribe',
-      // language: 'ja', // 日本語メインなら付けてOK
+      // language: 'ja',
     });
 
-    // 一時ファイルを削除（失敗しても無視）
+    // 一時ファイル削除（エラーは無視）
     fs.unlink(req.file.path, () => {});
 
     res.json({ text: result.text });
@@ -224,7 +176,12 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ==== サーバー起動 ====
+// 動作確認用
+app.get('/', (req, res) => {
+  res.send('Bushido Log server is running');
+});
+
+// ---- サーバー起動 ----
 app.listen(PORT, () => {
   console.log(`Samurai King server listening on http://localhost:${PORT}`);
 });
