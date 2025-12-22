@@ -27,7 +27,7 @@ const systemPrompt = `
 口調は厳しめだけど温かい、ジャマイカと日本の武士道をミックスした感じで話してください。
 `;
 
-// ヘルスチェック
+// ===== ヘルスチェック =====
 app.get('/', (req, res) => {
   res.json({ ok: true, message: 'Bushido-log server running' });
 });
@@ -73,7 +73,6 @@ app.post('/samurai-chat', async (req, res) => {
 
 // ====== /mission : とりあえずダミー ======
 app.post('/mission', async (req, res) => {
-  // 今はサーバーを安定させるための仮実装
   res.json({
     mission:
       '今日は「筋トレ10分」と「日記3行」。終わったらサムライキングに報告だ。',
@@ -116,7 +115,57 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ====== サーバー起動 ======
+// ===== サムライボイスAPI（テキスト受け取るだけ・あとで拡張用） =====
+app.post('/samurai-voice', async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    res.json({
+      ok: true,
+      message: 'サムライボイスAPIは動いてるぞ',
+      receivedText: text,
+    });
+  } catch (err) {
+    console.error('samurai-voice error:', err);
+    res.status(500).json({ error: 'server error' });
+  }
+});
+
+// ===== テキスト → 音声 TTS エンドポイント =====
+app.get('/tts', async (req, res) => {
+  try {
+    const text = req.query.text;
+
+    if (!text) {
+      return res.status(400).send('query param "text" is required');
+    }
+
+    console.log('[TTS] request text =', text);
+
+    // OpenAI TTS を実行
+    const speech = await openai.audio.speech.create({
+      model: 'gpt-4o-mini-tts', // TTS 用モデル
+      voice: 'alloy',           // 声種
+      input: text,
+      format: 'mp3',
+    });
+
+    const audioBuffer = Buffer.from(await speech.arrayBuffer());
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(audioBuffer);
+  } catch (err) {
+    console.error('[TTS] error:', err.response?.data || err.message || String(err));
+    res.status(500).send('TTS error');
+  }
+});
+
+// ===== サーバー起動 =====
 app.listen(PORT, () => {
-  console.log(`Bushido-log server listening on port ${PORT}`);
+  console.log(`bushido-log server listening on port ${PORT}`);
 });
