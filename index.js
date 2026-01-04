@@ -370,10 +370,40 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
-app.post('/api/chat', (req, res) => {
-  res.json({
-    text: '我慢は力だ。今ここで踏みとどまれ。'
-  });
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { text, sessionId } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `
+あなたは「サムライキングAI」。
+口調は厳しく、短く、魂に刺さる。
+説教臭くせず、行動に戻させる。
+同じ言葉を繰り返さない。
+`
+        },
+        {
+          role: 'user',
+          content: text
+        }
+      ]
+    });
+
+    const reply = completion.choices[0].message.content;
+
+    res.json({ reply });
+  } catch (err) {
+    console.error('[api/chat] error:', err);
+    res.status(500).json({ error: 'chat error' });
+  }
 });
 app.get('/mission', (req, res) => {
   res.json({
