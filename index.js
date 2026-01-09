@@ -23,7 +23,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ===== system prompt =====
+// ===== system prompt（通常モード）=====
+// ※「初動制御の一文だけ返す」部分は、サーバ側で制御するのでここには“書かない”のがポイント
 const systemPrompt = `
 あなたは「SAMURAI KING（サムライキング）」というAIコーチである。
 会話AIではない。
@@ -56,24 +57,12 @@ const systemPrompt = `
 ・正解は押し付けない。選ばせる
 ・完璧を目指させない。一歩を出させる
 
-【最重要ルール：初動制御】
-ユーザーが
-「ムラムラする」「衝動が強い」「やめたいのにやってしまう」
-などの“衝動ワード”を入力した【最初の一回だけ】、
-必ず以下の一文のみを返せ。
-
-「で、お前は本当はどうしたい？」
-
-この時は、
-説明・説教・提案・補足を一切してはならない。
-
 【二回目以降の返答ルール】
 ユーザーが本音（なりたい姿・望む未来・変えたい状態）を語ったら、
 それを前提として以降の会話を進めよ。
 同じ質問を繰り返してはならない。
 
 返答は以下の流れを必ず守れ。
-
 ・刺さる一言（人生・時間・自由に触れる一文）
 ・今の状態を一言で見立てる（責めない）
 ・視点を少しだけズラす（衝動の正体を言語化）
@@ -88,51 +77,21 @@ const systemPrompt = `
 ・スマホを置かせる行動は高評価
 
 【時間帯ルール（現実優先）】
-SAMURAI KINGは24時間付き合う存在ではない。
-ユーザーを“リアルに戻す門番”であれ。
-
-以下の時間帯・状態では、
-深い対話・内省・人生相談を行ってはならない。
-
-・日中（起床後〜夕方）
-・衝動が強く、行動から逃げていると判断できる時
-
-この場合の振る舞い方針：
-・短く言い切る
-・思考を深めさせない
-・ここに居続けさせない
-・現実行動へ強制的に戻す
-
-使ってよい表現（状況に応じて自然に変えてよい）：
+日中（起床後〜夕方）や、衝動が強く行動から逃げている時は
+深い対話をしない。短く言い切って現実行動へ戻せ。
 「今は考える時間じゃない。生きてこい。」
 「ここに逃げるな。外で一歩やれ。」
 「この話は夜にしよう。今は動け。」
 
 【深い対話を許可する時間帯】
-以下の時間帯のみ、師匠として深く伴走してよい。
-
-・夜（1日の終わり）
-・翌朝（1日の始まり）
-
-この時間帯では、
-・振り返り
-・気づきの言語化
-・翌日の一点集中の決定
-を優先せよ。
+夜（1日の終わり）と翌朝（1日の始まり）は
+振り返り／気づき／翌日の一点集中を優先して伴走せよ。
 
 【最重要思想（依存防止）】
-SAMURAI KINGの勝利条件は、
-「ユーザーが長く話すこと」ではない。
-
 ・昼は生きる
 ・夜に振り返る
 ・朝に決める
-
-このリズムをユーザーが取り戻した時、
-それがこのAIの勝利である。
-
-ユーザーを
-“常時AIと話す人間”にしてはならない。
+このリズムを取り戻させろ。
 
 【禁止事項】
 ・長文
@@ -145,42 +104,85 @@ SAMURAI KINGの勝利条件は、
 【文字量】
 ・音声で聞いても疲れない長さ
 ・一文は短く、リズムよく
-
-【返答の最重要制限】
-1回の返答は最大6〜8行まで。
-説明より“間”を優先し、削れる言葉は削れ。
+・1回の返答は最大6〜8行まで
 
 【合言葉（時々使え）】
 「今日は、誰かが生きたかった一日だ」
-
-ユーザーが現実で動けたら、それが正解。
-完璧を目指すな。一歩を出させろ。
 `;
+
+// ====== session memory（Render再起動で消えるがテストには十分）=====
+const sessions = new Map();
+// sessions.get(userId) => { askedImpulseOnce: boolean, lastAskAt: number }
+
+const getSession = (userId) => {
+  const key = userId && String(userId).trim() ? String(userId).trim() : 'anon';
+  const now = Date.now();
+  const s = sessions.get(key) || { askedImpulseOnce: false, lastAskAt: 0 };
+  s.lastAskAt = now;
+  sessions.set(key, s);
+  return s;
+};
+
+// ===== 衝動ワード判定（ゆるめでOK。必要なら増やす）=====
+const IMPULSE_WORDS = [
+  'ムラムラ',
+  '衝動',
+  'やめたいのに',
+  '我慢できない',
+  'オナ',
+  '自慰',
+  'ポルノ',
+  'porn',
+];
+
+const isImpulse = (t) => {
+  const text = String(t || '').toLowerCase();
+  return IMPULSE_WORDS.some((w) => text.includes(String(w).toLowerCase()));
+};
 
 // ===== ヘルスチェック =====
 app.get('/', (req, res) => {
   res.json({ ok: true, message: 'Bushido-log server running' });
 });
 
-// ====== chat handler（/samurai-chat と /api/chat 両対応） ======
+// ====== chat handler ======
 const handleChat = async (req, res) => {
-  const { text, messages } = req.body || {};
-  console.log('[chat] request body:', req.body);
+  const { text, messages, userId } = req.body || {};
+  console.log('[chat] request body:', { hasText: !!text, hasMessages: Array.isArray(messages), userId });
+
+  const session = getSession(userId);
+
+  // ★ここが肝：初動制御は「OpenAIに投げずに」サーバが返す
+  if (typeof text === 'string' && text.trim() && isImpulse(text) && !session.askedImpulseOnce) {
+    session.askedImpulseOnce = true;
+    session.lastAskAt = Date.now();
+    return res.json({ reply: 'で、お前は本当はどうしたい？' });
+  }
 
   let finalMessages;
 
-  // ① messages が来る場合（アプリがchat.completions風に送る場合）
+  // ① messages が来る場合
   if (Array.isArray(messages) && messages.length > 0) {
-    // systemが無いなら先頭に入れる（保険）
     const hasSystem = messages.some((m) => m?.role === 'system');
     finalMessages = hasSystem
       ? messages
       : [{ role: 'system', content: systemPrompt }, ...messages];
+
+    // すでに初動質問済みなら「繰り返すな」を上書きで入れる（保険）
+    if (session.askedImpulseOnce) {
+      finalMessages = [
+        { role: 'system', content: '注意：初動の問い「で、お前は本当はどうしたい？」は既に実行済み。二度と同じ質問を繰り返すな。' },
+        ...finalMessages,
+      ];
+    }
   }
-  // ② text が来る場合（単純POST）
+  // ② text が来る場合
   else if (typeof text === 'string' && text.trim()) {
     finalMessages = [
       { role: 'system', content: systemPrompt },
+      ...(session.askedImpulseOnce
+        ? [{ role: 'system', content: '注意：初動の問いは既に実行済み。二度と同じ質問を繰り返すな。' }]
+        : []),
       { role: 'user', content: text.trim() },
     ];
   } else {
@@ -211,26 +213,18 @@ const handleChat = async (req, res) => {
 };
 
 app.post('/samurai-chat', handleChat);
-app.post('/api/chat', handleChat); // ← これで "Cannot POST /api/chat" が消える
+app.post('/api/chat', handleChat);
 
-// ====== /mission : GET/POST 両方同じ返し ======
-const missionPayload = {
-  mission: '腕立て10回。終わったらアプリに戻れ。',
-};
+// ====== /mission : GET/POST ======
+const missionPayload = { mission: '腕立て10回。終わったらアプリに戻れ。' };
 app.get('/mission', (req, res) => res.json(missionPayload));
 app.post('/mission', (req, res) => res.json(missionPayload));
 
-// ====== /transcribe : 音声 → テキスト ======
+// ====== /transcribe ======
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    console.log('[transcribe] headers:', req.headers['content-type']);
-    console.log('[transcribe] file:', req.file);
-
     const file = req.file;
-    if (!file) {
-      console.log('[transcribe] no file received');
-      return res.status(400).json({ error: 'audio file is required' });
-    }
+    if (!file) return res.status(400).json({ error: 'audio file is required' });
 
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(file.path),
@@ -238,44 +232,26 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       language: 'ja',
     });
 
-    // ファイル削除（失敗しても無視）
     fs.unlink(file.path, () => {});
-
-    console.log('[transcribe] success:', result.text);
     res.json({ text: result.text });
   } catch (err) {
     console.error('[transcribe] error:', err?.response?.data || err?.message || String(err));
-    res.status(500).json({
-      error: 'Transcription failed',
-      detail: err?.response?.data || err?.message || String(err),
-    });
+    res.status(500).json({ error: 'Transcription failed' });
   }
 });
 
-// ===== サムライボイスAPI（テキスト受け取るだけ・あとで拡張用） =====
+// ===== /samurai-voice =====
 app.post('/samurai-voice', async (req, res) => {
-  try {
-    const { text } = req.body || {};
-    if (!text) return res.status(400).json({ error: 'text is required' });
-
-    res.json({
-      ok: true,
-      message: 'サムライボイスAPIは動いてるぞ',
-      receivedText: text,
-    });
-  } catch (err) {
-    console.error('[samurai-voice] error:', err);
-    res.status(500).json({ error: 'server error' });
-  }
+  const { text } = req.body || {};
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  res.json({ ok: true, message: 'サムライボイスAPIは動いてるぞ', receivedText: text });
 });
 
-// ===== TTS（GET /tts?text=...） =====
+// ===== TTS =====
 app.get('/tts', async (req, res) => {
   try {
     const text = req.query.text;
     if (!text) return res.status(400).send('query param "text" is required');
-
-    console.log('[TTS] request text =', text);
 
     const speech = await openai.audio.speech.create({
       model: 'gpt-4o-mini-tts',
@@ -294,7 +270,6 @@ app.get('/tts', async (req, res) => {
   }
 });
 
-// ===== TTS（POST /api/tts {text:"..."}） =====
 app.post('/api/tts', async (req, res) => {
   try {
     const { text } = req.body || {};
@@ -317,7 +292,7 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
-// ===== サーバー起動 =====
+// ===== 起動 =====
 app.listen(PORT, () => {
   console.log(`bushido-log server listening on port ${PORT}`);
 });
