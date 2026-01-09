@@ -1,15 +1,29 @@
 // index.js （bushido-log-server 用）
 
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
 const OpenAI = require('openai');
 
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// ===== middleware =====
+app.use(cors());
+app.use(express.json({ limit: '5mb' }));
+
+// アップロード用（音声ファイル）
+const upload = multer({ dest: 'uploads/' });
+
+// ===== OpenAI =====
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+// ===== system prompt =====
 const systemPrompt = `
 あなたは「SAMURAI KING（サムライキング）」というAIコーチである。
 会話AIではない。
@@ -139,69 +153,68 @@ SAMURAI KINGの勝利条件は、
 完璧を目指すな。一歩を出させろ。
 `;
 
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-app.use(cors());
-app.use(express.json());
-
-// アップロード用（音声ファイル）
-const upload = multer({ dest: 'uploads/' });
-
-
 // ===== ヘルスチェック =====
 app.get('/', (req, res) => {
   res.json({ ok: true, message: 'Bushido-log server running' });
 });
 
-// ====== /samurai-chat : テキスト相談 ======
-('/samurai-chat', async (req, res) => {
-  const { text } = req.body || {};
-  consoleapp.post.log('[samurai-chat] request body:', req.body);
+// ====== chat handler（/samurai-chat と /api/chat 両対応） ======
+const handleChat = async (req, res) => {
+  const { text, messages } = req.body || {};
+  console.log('[chat] request body:', req.body);
 
-  if (!text || typeof text !== 'string') {
-    return res.status(400).json({ error: 'text is required' });
+  let finalMessages;
+
+  // ① messages が来る場合（アプリがchat.completions風に送る場合）
+  if (Array.isArray(messages) && messages.length > 0) {
+    // systemが無いなら先頭に入れる（保険）
+    const hasSystem = messages.some((m) => m?.role === 'system');
+    finalMessages = hasSystem
+      ? messages
+      : [{ role: 'system', content: systemPrompt }, ...messages];
+  }
+  // ② text が来る場合（単純POST）
+  else if (typeof text === 'string' && text.trim()) {
+    finalMessages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: text.trim() },
+    ];
+  } else {
+    return res.status(400).json({ error: 'text or messages is required' });
   }
 
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       temperature: 0.9,
-max_tokens: 400,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: text },
-      ],
-     
+      max_tokens: 400,
+      messages: finalMessages,
     });
 
     const reply =
       completion.choices?.[0]?.message?.content?.trim() ||
       '・・・今日はうまく言葉が出てこん。';
 
-    console.log('[samurai-chat] reply:', reply);
-
+    console.log('[chat] reply:', reply);
     res.json({ reply });
   } catch (err) {
-    console.error(
-      '[samurai-chat] error:',
-      err.response?.data || err.message || String(err)
-    );
-
+    console.error('[chat] error:', err?.response?.data || err?.message || String(err));
     res.status(500).json({
-      error: 'samurai-chat error',
-      detail: err.response?.data || err.message || String(err),
+      error: 'chat error',
+      detail: err?.response?.data || err?.message || String(err),
     });
   }
-});
+};
 
-// ====== /mission : とりあえずダミー ======
-app.post('/mission', async (req, res) => {
-  res.json({
-    mission:
-      '今日は「筋トレ10分」と「日記3行」。終わったらサムライキングに報告だ。',
-  });
-});
+app.post('/samurai-chat', handleChat);
+app.post('/api/chat', handleChat); // ← これで "Cannot POST /api/chat" が消える
+
+// ====== /mission : GET/POST 両方同じ返し ======
+const missionPayload = {
+  mission: '腕立て10回。終わったらアプリに戻れ。',
+};
+app.get('/mission', (req, res) => res.json(missionPayload));
+app.post('/mission', (req, res) => res.json(missionPayload));
 
 // ====== /transcribe : 音声 → テキスト ======
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
@@ -221,20 +234,16 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       language: 'ja',
     });
 
-    // 一応ファイル削除（失敗しても無視）
+    // ファイル削除（失敗しても無視）
     fs.unlink(file.path, () => {});
 
     console.log('[transcribe] success:', result.text);
     res.json({ text: result.text });
   } catch (err) {
-    console.error(
-      '[transcribe] error:',
-      err.response?.data || err.message || String(err)
-    );
-
+    console.error('[transcribe] error:', err?.response?.data || err?.message || String(err));
     res.status(500).json({
       error: 'Transcription failed',
-      detail: err.response?.data || err.message || String(err),
+      detail: err?.response?.data || err?.message || String(err),
     });
   }
 });
@@ -242,11 +251,8 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 // ===== サムライボイスAPI（テキスト受け取るだけ・あとで拡張用） =====
 app.post('/samurai-voice', async (req, res) => {
   try {
-    const { text } = req.body;
-
-    if (!text) {
-      return res.status(400).json({ error: 'text is required' });
-    }
+    const { text } = req.body || {};
+    if (!text) return res.status(400).json({ error: 'text is required' });
 
     res.json({
       ok: true,
@@ -254,40 +260,37 @@ app.post('/samurai-voice', async (req, res) => {
       receivedText: text,
     });
   } catch (err) {
-    console.error('samurai-voice error:', err);
+    console.error('[samurai-voice] error:', err);
     res.status(500).json({ error: 'server error' });
   }
 });
 
-// ===== テキスト → 音声 TTS エンドポイント =====
+// ===== TTS（GET /tts?text=...） =====
 app.get('/tts', async (req, res) => {
   try {
     const text = req.query.text;
-
-    if (!text) {
-      return res.status(400).send('query param "text" is required');
-    }
+    if (!text) return res.status(400).send('query param "text" is required');
 
     console.log('[TTS] request text =', text);
 
-    // OpenAI TTS を実行
     const speech = await openai.audio.speech.create({
-      model: 'gpt-4o-mini-tts', // TTS 用モデル
-      voice: 'alloy',           // 声種
-      input: text,
+      model: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      input: String(text),
       format: 'mp3',
     });
 
     const audioBuffer = Buffer.from(await speech.arrayBuffer());
-
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-store');
     res.send(audioBuffer);
   } catch (err) {
-    console.error('[TTS] error:', err.response?.data || err.message || String(err));
+    console.error('[TTS] error:', err?.response?.data || err?.message || String(err));
     res.status(500).send('TTS error');
   }
 });
+
+// ===== TTS（POST /api/tts {text:"..."}） =====
 app.post('/api/tts', async (req, res) => {
   try {
     const { text } = req.body || {};
@@ -296,7 +299,7 @@ app.post('/api/tts', async (req, res) => {
     const speech = await openai.audio.speech.create({
       model: 'gpt-4o-mini-tts',
       voice: 'alloy',
-      input: text,
+      input: String(text),
       format: 'mp3',
     });
 
@@ -305,17 +308,11 @@ app.post('/api/tts', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.send(audioBuffer);
   } catch (err) {
-    console.error('[api/tts] error:', err.response?.data || err.message || String(err));
+    console.error('[api/tts] error:', err?.response?.data || err?.message || String(err));
     res.status(500).json({ error: 'TTS error' });
   }
 });
 
-
-app.get('/mission', (req, res) => {
-  res.json({
-    mission: '腕立て10回。終わったらアプリに戻れ。'
-  });
-});
 // ===== サーバー起動 =====
 app.listen(PORT, () => {
   console.log(`bushido-log server listening on port ${PORT}`);
