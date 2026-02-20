@@ -23,17 +23,61 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ===== system prompt（通常モード）=====
-// ※「初動制御の一文だけ返す」部分は、サーバ側で制御するのでここには“書かない”のがポイント
+// ===== APIキー認証 =====
+const API_SECRET = process.env.BUSHIDO_API_SECRET || 'bushido-samurai-2026';
+
+const authMiddleware = (req, res, next) => {
+  const key = req.headers['x-api-key'];
+  if (key !== API_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
+
+// ===== レート制限（メモリベース） =====
+// key: sessionId, value: { count, date, isPro }
+const rateLimits = new Map();
+
+const DAILY_LIMIT_FREE = 3;
+const DAILY_LIMIT_PRO = 30;
+
+const checkRateLimit = (sessionId, isPro) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const key = sessionId || 'anon';
+  const entry = rateLimits.get(key);
+  const limit = isPro ? DAILY_LIMIT_PRO : DAILY_LIMIT_FREE;
+
+  if (!entry || entry.date !== today) {
+    rateLimits.set(key, { count: 1, date: today });
+    return { allowed: true, remaining: limit - 1 };
+  }
+
+  if (entry.count >= limit) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  entry.count++;
+  return { allowed: true, remaining: limit - entry.count };
+};
+
+// 古いレート制限データを定期クリーン（メモリリーク防止）
+setInterval(() => {
+  const today = new Date().toISOString().slice(0, 10);
+  for (const [key, val] of rateLimits) {
+    if (val.date !== today) rateLimits.delete(key);
+  }
+}, 60 * 60 * 1000); // 1時間ごと
+
+// ===== system prompt =====
 const systemPrompt = `
 あなたは「SAMURAI KING（サムライキング）」というAIコーチである。
 会話AIではない。
-ユーザーの人生を“現実で一歩進める”ための
+ユーザーの人生を"現実で一歩進める"ための
 「持ち歩ける自己啓発本」「人生の師匠」として振る舞え。
 
 【存在目的】
 ・ユーザーが「明日死んでも後悔しない選択」をできるようにする
-・衝動・不安・依存を“今日の行動”に変える
+・衝動・不安・依存を"今日の行動"に変える
 ・自由・楽しさ・感謝を現実に接続する
 
 【基本スタンス】
@@ -79,19 +123,10 @@ const systemPrompt = `
 【時間帯ルール（現実優先）】
 日中（起床後〜夕方）や、衝動が強く行動から逃げている時は
 深い対話をしない。短く言い切って現実行動へ戻せ。
-「今は考える時間じゃない。生きてこい。」
-「ここに逃げるな。外で一歩やれ。」
-「この話は夜にしよう。今は動け。」
 
 【深い対話を許可する時間帯】
 夜（1日の終わり）と翌朝（1日の始まり）は
 振り返り／気づき／翌日の一点集中を優先して伴走せよ。
-
-【最重要思想（依存防止）】
-・昼は生きる
-・夜に振り返る
-・朝に決める
-このリズムを取り戻させろ。
 
 【禁止事項】
 ・長文
@@ -110,12 +145,11 @@ const systemPrompt = `
 「今日は、誰かが生きたかった一日だ」
 `;
 
-// ====== session memory（Render再起動で消えるがテストには十分）=====
+// ===== セッション管理 =====
 const sessions = new Map();
-// sessions.get(userId) => { askedImpulseOnce: boolean, lastAskAt: number }
 
-const getSession = (userId) => {
-  const key = userId && String(userId).trim() ? String(userId).trim() : 'anon';
+const getSession = (sessionId) => {
+  const key = sessionId && String(sessionId).trim() ? String(sessionId).trim() : 'anon';
   const now = Date.now();
   const s = sessions.get(key) || { askedImpulseOnce: false, lastAskAt: 0 };
   s.lastAskAt = now;
@@ -123,16 +157,18 @@ const getSession = (userId) => {
   return s;
 };
 
-// ===== 衝動ワード判定（ゆるめでOK。必要なら増やす）=====
+// 古いセッションを定期クリーン
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [key, val] of sessions) {
+    if (val.lastAskAt < cutoff) sessions.delete(key);
+  }
+}, 60 * 60 * 1000);
+
+// ===== 衝動ワード判定 =====
 const IMPULSE_WORDS = [
-  'ムラムラ',
-  '衝動',
-  'やめたいのに',
-  '我慢できない',
-  'オナ',
-  '自慰',
-  'ポルノ',
-  'porn',
+  'ムラムラ', '衝動', 'やめたいのに', '我慢できない',
+  'オナ', '自慰', 'ポルノ', 'porn',
 ];
 
 const isImpulse = (t) => {
@@ -147,37 +183,43 @@ app.get('/', (req, res) => {
 
 // ====== chat handler ======
 const handleChat = async (req, res) => {
-  const { text, messages, userId } = req.body || {};
-  console.log('[chat] request body:', { hasText: !!text, hasMessages: Array.isArray(messages), userId });
+  const { text, messages, sessionId, isPro } = req.body || {};
 
-  const session = getSession(userId);
+  // レート制限チェック
+  const rateCheck = checkRateLimit(sessionId, isPro === true);
+  if (!rateCheck.allowed) {
+    return res.status(429).json({
+      error: 'rate_limit',
+      message: isPro
+        ? '今日の相談上限（30回）に達したでござる。明日また来い。'
+        : '無料相談は1日3回まで。Proになれば30回まで相談できるぞ。',
+      remaining: 0,
+    });
+  }
 
-  // ★ここが肝：初動制御は「OpenAIに投げずに」サーバが返す
+  const session = getSession(sessionId);
+
+  // 初動制御
   if (typeof text === 'string' && text.trim() && isImpulse(text) && !session.askedImpulseOnce) {
     session.askedImpulseOnce = true;
-    session.lastAskAt = Date.now();
-    return res.json({ reply: 'で、お前は本当はどうしたい？' });
+    return res.json({ reply: 'で、お前は本当はどうしたい？', remaining: rateCheck.remaining });
   }
 
   let finalMessages;
 
-  // ① messages が来る場合
   if (Array.isArray(messages) && messages.length > 0) {
     const hasSystem = messages.some((m) => m?.role === 'system');
     finalMessages = hasSystem
       ? messages
       : [{ role: 'system', content: systemPrompt }, ...messages];
 
-    // すでに初動質問済みなら「繰り返すな」を上書きで入れる（保険）
     if (session.askedImpulseOnce) {
       finalMessages = [
         { role: 'system', content: '注意：初動の問い「で、お前は本当はどうしたい？」は既に実行済み。二度と同じ質問を繰り返すな。' },
         ...finalMessages,
       ];
     }
-  }
-  // ② text が来る場合
-  else if (typeof text === 'string' && text.trim()) {
+  } else if (typeof text === 'string' && text.trim()) {
     finalMessages = [
       { role: 'system', content: systemPrompt },
       ...(session.askedImpulseOnce
@@ -191,7 +233,7 @@ const handleChat = async (req, res) => {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       temperature: 0.9,
       max_tokens: 400,
       messages: finalMessages,
@@ -201,27 +243,47 @@ const handleChat = async (req, res) => {
       completion.choices?.[0]?.message?.content?.trim() ||
       '・・・今日はうまく言葉が出てこん。';
 
-    console.log('[chat] reply:', reply);
-    res.json({ reply });
+    res.json({ reply, remaining: rateCheck.remaining });
   } catch (err) {
-    console.error('[chat] error:', err?.response?.data || err?.message || String(err));
-    res.status(500).json({
-      error: 'chat error',
-      detail: err?.response?.data || err?.message || String(err),
-    });
+    console.error('[chat] error:', err?.message || String(err));
+    res.status(500).json({ error: 'chat error' });
   }
 };
 
-app.post('/samurai-chat', handleChat);
-app.post('/api/chat', handleChat);
+app.post('/samurai-chat', authMiddleware, handleChat);
+app.post('/api/chat', authMiddleware, handleChat);
 
-// ====== /mission : GET/POST ======
-const missionPayload = { mission: '腕立て10回。終わったらアプリに戻れ。' };
-app.get('/mission', (req, res) => res.json(missionPayload));
-app.post('/mission', (req, res) => res.json(missionPayload));
+// ====== /mission ======
+app.post('/mission', authMiddleware, async (req, res) => {
+  const rateCheck = checkRateLimit(req.body?.sessionId, req.body?.isPro === true);
+  if (!rateCheck.allowed) {
+    return res.status(429).json({ error: 'rate_limit', mission: '今日の行動：外に出て5分歩け。' });
+  }
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 1.0,
+      max_tokens: 100,
+      messages: [
+        { role: 'system', content: 'お前はサムライの師匠だ。今日のサムライミッションを1つだけ出せ。5〜15分で終わる具体的な行動。体を動かす or 環境を変える内容優先。1〜2文で。番号禁止。' },
+        { role: 'user', content: '今日のミッションをくれ' },
+      ],
+    });
+    const mission = completion.choices?.[0]?.message?.content?.trim() || '腕立て10回。終わったらアプリに戻れ。';
+    res.json({ mission });
+  } catch (err) {
+    console.error('[mission] error:', err?.message);
+    res.json({ mission: '腕立て10回。終わったらアプリに戻れ。' });
+  }
+});
+
+app.get('/mission', (req, res) => {
+  res.json({ mission: '腕立て10回。終わったらアプリに戻れ。' });
+});
 
 // ====== /transcribe ======
-app.post('/transcribe', upload.single('audio'), async (req, res) => {
+app.post('/transcribe', authMiddleware, upload.single('audio'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'audio file is required' });
@@ -235,44 +297,15 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     fs.unlink(file.path, () => {});
     res.json({ text: result.text });
   } catch (err) {
-    console.error('[transcribe] error:', err?.response?.data || err?.message || String(err));
+    console.error('[transcribe] error:', err?.message || String(err));
     res.status(500).json({ error: 'Transcription failed' });
   }
 });
 
-// ===== /samurai-voice =====
-app.post('/samurai-voice', async (req, res) => {
-  const { text } = req.body || {};
-  if (!text) return res.status(400).json({ error: 'text is required' });
-  res.json({ ok: true, message: 'サムライボイスAPIは動いてるぞ', receivedText: text });
-});
-
-// ===== TTS =====
-app.get('/tts', async (req, res) => {
+// ===== TTS（統合） =====
+const handleTTS = async (req, res) => {
   try {
-    const text = req.query.text;
-    if (!text) return res.status(400).send('query param "text" is required');
-
-    const speech = await openai.audio.speech.create({
-      model: 'gpt-4o-mini-tts',
-      voice: 'alloy',
-      input: String(text),
-      format: 'mp3',
-    });
-
-    const audioBuffer = Buffer.from(await speech.arrayBuffer());
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Cache-Control', 'no-store');
-    res.send(audioBuffer);
-  } catch (err) {
-    console.error('[TTS] error:', err?.response?.data || err?.message || String(err));
-    res.status(500).send('TTS error');
-  }
-});
-
-app.post('/api/tts', async (req, res) => {
-  try {
-    const { text } = req.body || {};
+    const text = req.body?.text || req.query?.text;
     if (!text) return res.status(400).json({ error: 'text is required' });
 
     const speech = await openai.audio.speech.create({
@@ -287,10 +320,13 @@ app.post('/api/tts', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.send(audioBuffer);
   } catch (err) {
-    console.error('[api/tts] error:', err?.response?.data || err?.message || String(err));
+    console.error('[TTS] error:', err?.message || String(err));
     res.status(500).json({ error: 'TTS error' });
   }
-});
+};
+
+app.get('/tts', authMiddleware, handleTTS);
+app.post('/api/tts', authMiddleware, handleTTS);
 
 
 // ===== 感謝10個達成時のAI感想 =====
