@@ -325,7 +325,7 @@ const handleTTS = async (req, res) => {
   }
 };
 
-app.get('/tts', authMiddleware, handleTTS);
+app.get('/tts', handleTTS);
 app.post('/api/tts', authMiddleware, handleTTS);
 
 
